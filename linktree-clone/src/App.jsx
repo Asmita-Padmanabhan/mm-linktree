@@ -6,7 +6,7 @@ import AdminDashboard from './pages/AdminDashboard'
 
 function App() {
   // Change 'demo' to your username to make it the default
-  const DEFAULT_USERNAME = 'Musical Musings'
+  const DEFAULT_USERNAME = 'musicalmusings'
   
   return (
     <BrowserRouter>
