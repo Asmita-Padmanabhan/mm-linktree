@@ -28,6 +28,8 @@ export default function AdminDashboard() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [passwordMessage, setPasswordMessage] = useState('')
+  const [draggedItem, setDraggedItem] = useState(null)
+  const [draggedType, setDraggedType] = useState(null) // 'section' or 'link'
 
   useEffect(() => {
     const isAuthenticated = sessionStorage.getItem(`admin_${username}`)
@@ -93,11 +95,14 @@ export default function AdminDashboard() {
     }
   }
 
+  const handleColorChange = (field, value) => {
+    setFormData(prev => ({ ...prev, [field]: value }))
+  }
+
   const handlePasswordChange = async (e) => {
     e.preventDefault()
     setPasswordMessage('')
 
-    // Validate passwords
     if (passwordData.new_password !== passwordData.confirm_password) {
       setPasswordMessage('❌ New passwords do not match')
       setTimeout(() => setPasswordMessage(''), 3000)
@@ -111,7 +116,6 @@ export default function AdminDashboard() {
     }
 
     try {
-      // Verify current password
       const { data: profileData, error: fetchError } = await supabase
         .from('profiles')
         .select('admin_password')
@@ -126,7 +130,6 @@ export default function AdminDashboard() {
         return
       }
 
-      // Update password
       const { error: updateError } = await supabase
         .from('profiles')
         .update({ admin_password: passwordData.new_password })
@@ -301,6 +304,69 @@ export default function AdminDashboard() {
     }
   }
 
+  // Drag and Drop Handlers
+  const handleDragStart = (e, item, type) => {
+    setDraggedItem(item)
+    setDraggedType(type)
+    e.dataTransfer.effectAllowed = 'move'
+  }
+
+  const handleDragOver = (e) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+  }
+
+  const handleDrop = async (e, targetItem, type) => {
+    e.preventDefault()
+    
+    if (!draggedItem || draggedType !== type) return
+
+    if (type === 'section') {
+      await reorderSections(draggedItem, targetItem)
+    } else if (type === 'link') {
+      await reorderLinks(draggedItem, targetItem)
+    }
+
+    setDraggedItem(null)
+    setDraggedType(null)
+  }
+
+  const reorderSections = async (draggedSection, targetSection) => {
+    if (draggedSection.id === targetSection.id) return
+
+    const sortedSections = [...sectionsData]
+    const draggedIndex = sortedSections.findIndex(s => s.id === draggedSection.id)
+    const targetIndex = sortedSections.findIndex(s => s.id === targetSection.id)
+
+    sortedSections.splice(draggedIndex, 1)
+    sortedSections.splice(targetIndex, 0, draggedSection)
+
+    // Update positions in database
+    for (let i = 0; i < sortedSections.length; i++) {
+      await updateSection(sortedSections[i].id, { position: i })
+    }
+  }
+
+  const reorderLinks = async (draggedLink, targetLink) => {
+    if (draggedLink.id === targetLink.id) return
+    if (draggedLink.section_id !== targetLink.section_id) return // Can't drag between sections
+
+    const sectionLinks = sectionsData
+      .find(s => s.id === draggedLink.section_id)
+      .links.slice()
+    
+    const draggedIndex = sectionLinks.findIndex(l => l.id === draggedLink.id)
+    const targetIndex = sectionLinks.findIndex(l => l.id === targetLink.id)
+
+    sectionLinks.splice(draggedIndex, 1)
+    sectionLinks.splice(targetIndex, 0, draggedLink)
+
+    // Update positions in database
+    for (let i = 0; i < sectionLinks.length; i++) {
+      await updateLink(sectionLinks[i].id, { position: i })
+    }
+  }
+
   if (!profile) {
     return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>
   }
@@ -367,8 +433,8 @@ export default function AdminDashboard() {
         {message && (
           <div style={{
             padding: '1rem',
-            background: message.includes('Error') ? '#fee2e2' : '#d1fae5',
-            color: message.includes('Error') ? '#dc2626' : '#059669',
+            background: message.includes('❌') ? '#fee2e2' : '#d1fae5',
+            color: message.includes('❌') ? '#dc2626' : '#059669',
             borderRadius: '12px',
             marginBottom: '1.5rem',
             textAlign: 'center',
@@ -518,7 +584,7 @@ export default function AdminDashboard() {
                   <input
                     type="color"
                     value={formData[key]}
-                    onChange={(e) => setFormData({ ...formData, [key]: e.target.value })}
+                    onChange={(e) => handleColorChange(key, e.target.value)}
                     style={{
                       width: '50px',
                       height: '40px',
@@ -530,7 +596,7 @@ export default function AdminDashboard() {
                   <input
                     type="text"
                     value={formData[key]}
-                    onChange={(e) => setFormData({ ...formData, [key]: e.target.value })}
+                    onChange={(e) => handleColorChange(key, e.target.value)}
                     style={{
                       flex: 1,
                       padding: '0.5rem',
@@ -775,6 +841,10 @@ export default function AdminDashboard() {
               deleteLink={deleteLink}
               uploadImage={uploadImage}
               removeLinkIcon={removeLinkIcon}
+              onDragStart={handleDragStart}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+              isDragging={draggedItem?.id === section.id && draggedType === 'section'}
             />
           ))}
 
@@ -793,13 +863,35 @@ export default function AdminDashboard() {
 
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+        
+        .dragging {
+          opacity: 0.5;
+        }
+        
+        .drag-over {
+          border: 2px dashed #667eea !important;
+          background: #f0f4ff !important;
+        }
       `}</style>
     </div>
   )
 }
 
 // Section Editor Component
-function SectionEditor({ section, updateSection, deleteSection, addLink, updateLink, deleteLink, uploadImage, removeLinkIcon }) {
+function SectionEditor({ 
+  section, 
+  updateSection, 
+  deleteSection, 
+  addLink, 
+  updateLink, 
+  deleteLink, 
+  uploadImage, 
+  removeLinkIcon,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  isDragging
+}) {
   const [title, setTitle] = useState(section.title)
   const [isEditing, setIsEditing] = useState(false)
 
@@ -809,13 +901,21 @@ function SectionEditor({ section, updateSection, deleteSection, addLink, updateL
   }
 
   return (
-    <div style={{
-      marginBottom: '2rem',
-      padding: '1.5rem',
-      background: '#f8fafc',
-      borderRadius: '12px',
-      border: '2px solid #e2e8f0'
-    }}>
+    <div 
+      draggable
+      onDragStart={(e) => onDragStart(e, section, 'section')}
+      onDragOver={onDragOver}
+      onDrop={(e) => onDrop(e, section, 'section')}
+      className={isDragging ? 'dragging' : ''}
+      style={{
+        marginBottom: '2rem',
+        padding: '1.5rem',
+        background: '#f8fafc',
+        borderRadius: '12px',
+        border: '2px solid #e2e8f0',
+        transition: 'all 0.2s ease'
+      }}
+    >
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
@@ -823,7 +923,12 @@ function SectionEditor({ section, updateSection, deleteSection, addLink, updateL
         marginBottom: '1rem'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1 }}>
-          <GripVertical size={20} color="#94a3b8" style={{ cursor: 'grab' }} />
+          <GripVertical 
+            size={20} 
+            color="#94a3b8" 
+            style={{ cursor: 'grab' }} 
+            title="Drag to reorder"
+          />
           {isEditing ? (
             <div style={{ display: 'flex', gap: '0.5rem', flex: 1 }}>
               <input
@@ -904,6 +1009,9 @@ function SectionEditor({ section, updateSection, deleteSection, addLink, updateL
             deleteLink={deleteLink}
             uploadImage={uploadImage}
             removeLinkIcon={removeLinkIcon}
+            onDragStart={onDragStart}
+            onDragOver={onDragOver}
+            onDrop={onDrop}
           />
         ))}
       </div>
@@ -912,11 +1020,12 @@ function SectionEditor({ section, updateSection, deleteSection, addLink, updateL
 }
 
 // Link Editor Component
-function LinkEditor({ link, updateLink, deleteLink, uploadImage, removeLinkIcon }) {
+function LinkEditor({ link, updateLink, deleteLink, uploadImage, removeLinkIcon, onDragStart, onDragOver, onDrop }) {
   const [formData, setFormData] = useState({
     title: link.title,
     url: link.url
   })
+  const [isDragging, setIsDragging] = useState(false)
 
   const handleUpdate = (field, value) => {
     setFormData({ ...formData, [field]: value })
@@ -924,16 +1033,33 @@ function LinkEditor({ link, updateLink, deleteLink, uploadImage, removeLinkIcon 
   }
 
   return (
-    <div style={{
-      display: 'flex',
-      gap: '0.75rem',
-      padding: '1rem',
-      background: 'white',
-      borderRadius: '10px',
-      border: '1px solid #e2e8f0'
-    }}>
+    <div 
+      draggable
+      onDragStart={(e) => {
+        setIsDragging(true)
+        onDragStart(e, link, 'link')
+      }}
+      onDragEnd={() => setIsDragging(false)}
+      onDragOver={onDragOver}
+      onDrop={(e) => onDrop(e, link, 'link')}
+      className={isDragging ? 'dragging' : ''}
+      style={{
+        display: 'flex',
+        gap: '0.75rem',
+        padding: '1rem',
+        background: 'white',
+        borderRadius: '10px',
+        border: '1px solid #e2e8f0',
+        transition: 'all 0.2s ease'
+      }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <GripVertical size={18} color="#94a3b8" style={{ cursor: 'grab' }} />
+        <GripVertical 
+          size={18} 
+          color="#94a3b8" 
+          style={{ cursor: 'grab' }} 
+          title="Drag to reorder"
+        />
         <div style={{ position: 'relative' }}>
           {link.icon_url ? (
             <div style={{ position: 'relative' }}>
